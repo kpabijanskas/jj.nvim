@@ -6,8 +6,22 @@ local M = {
 	dependency_cache = {},
 }
 
--- No-op setup, but keep it for API consistency in case we need it later.
-function M.setup(_) end
+---@alias jj.utils.forge_type "github"|"gitlab"|"gitea"
+
+---@class jj.utils.forge_config
+---@field type? jj.utils.forge_type
+
+---@class jj.utils.config
+---@field forges? table<string, jj.utils.forge_config>
+
+---@type jj.utils.config
+M.config = {}
+
+-- Setup the utils module
+---@param cfg? jj.utils.config
+function M.setup(cfg)
+	M.config = vim.tbl_deep_extend("force", M.config, cfg or {})
+end
 
 --- Cache for executable checks to avoid repeated system calls
 
@@ -589,19 +603,48 @@ function M.open_pr_for_bookmark(bookmark)
 			return
 		end
 
+		-- Helper functions to build appropriate URL formats
+		local function build_github_url(url, encoded_bookmark)
+			return url .. "/compare/" .. encoded_bookmark .. "?expand=1"
+		end
+
+		local function build_gitlab_url(url, encoded_bookmark)
+			return url .. "/-/merge_requests/new?merge_request[source_branch]=" .. encoded_bookmark
+		end
+
+		local function build_gitea_url(url, encoded_bookmark)
+			return url .. "/compare/" .. encoded_bookmark
+		end
+
 		-- Construct the appropriate PR/MR URL based on the platform
 		local encoded_bookmark = M.url_encode(bookmark)
 		local pr_url
 
-		if host:match("gitlab") then
-			-- GitLab merge request URL
-			pr_url = repo_url .. "/-/merge_requests/new?merge_request[source_branch]=" .. encoded_bookmark
-		elseif host:match("gitea") or host:match("forgejo") then
-			-- Gitea/Forgejo compare URL
-			pr_url = repo_url .. "/compare/" .. encoded_bookmark
-		else
-			-- Default to GitHub-style compare URL (works for GitHub, Gitea, etc.)
-			pr_url = repo_url .. "/compare/" .. encoded_bookmark .. "?expand=1"
+		if M.config.forges then
+			for forge_host, forge_config in pairs(M.config.forges) do
+				if forge_host:lower() == host:lower() then
+					if forge_config.type == "github" then
+						pr_url = build_github_url(repo_url, encoded_bookmark)
+					elseif forge_config.type == "gitlab" then
+						pr_url = build_gitlab_url(repo_url, encoded_bookmark)
+					elseif forge_config.type == "gitea" then
+						pr_url = build_gitea_url(repo_url, encoded_bookmark)
+					end
+				end
+			end
+		end
+
+		if pr_url == nil then
+			if host:match("gitlab") then
+				-- GitLab merge request URL
+				pr_url = build_gitlab_url(repo_url, encoded_bookmark)
+			elseif host:match("gitea") or host:match("forgejo") then
+				-- Gitea/Forgejo compare URL
+				pr_url = build_gitea_url(repo_url, encoded_bookmark)
+			else
+				-- Default to GitHub-style compare URL (works for GitHub, Gitea, etc.)
+				pr_url = build_github_url(repo_url, encoded_bookmark)
+			end
 		end
 
 		M.open_url(pr_url)
